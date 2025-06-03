@@ -3,14 +3,44 @@ import boto3
 import logging
 from PIL import Image
 import io
-from pprint import pprint
+import requests
+import os
 
 # Initialize AWS S3 client
 s3_client = boto3.client('s3')
+secret_client = boto3.client('secretsmanager')
+cloudfront_client = boto3.client('cloudfront')
 
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+def getSecret(secret_name):
+    """Retrieve the secret from AWS Secrets Manager."""
+    try:
+        response = secret_client.get_secret_value(SecretId=secret_name)
+        return json.loads(response['SecretString'])
+    except Exception as e:
+        logger.ingo(f"Error retrieving secret {secret_name}: {str(e)}")
+        raise 
+    
+def send_slack_notification(original_file_name,cdn_url,error_message,slack_token):
+    slack_url="https://slack.com/api/chat.postMessage"
+    headers = {"Authorization": f"Bearer {slack_token}"}
+    payload={
+        "channel":"#cmyktorgb-alerts",
+        "text":(
+             f"CMYK to RGB Conversion Failed\n"
+            f"Original File: {original_file_name}\n"
+            f"CDN URL: {cdn_url}\n"
+            f"Error: {error_message}"
+        )
+    }
+    try:
+        response = requests.post(slack_url,json=payload,headers=headers)
+        response.raise_for_status()
+    except Exception as e:
+        logger.error(f"Error sending Slack notification: {str(e)}")
 
 def is_cmyk(image):
     """Check if the image is in CMYK mode."""
@@ -20,6 +50,24 @@ def convert_to_rgb(image):
     """Convert CMYK image to RGB."""
     return image.convert('RGB')
 
+def invalidate_CDN_cache(distribution_id, key):
+    """Invalidate the CDN cache for the given key."""
+    try:
+        response = cloudfront_client.create_invalidation(
+            DistributionId=distribution_id,
+            InvalidationBatch={
+                'Paths': {
+                    'Quantity': 1,
+                    'Items': [f'/{key}']
+                },
+                'CallerReference': str(hash(key))  # Unique reference for the invalidation
+            }
+        )
+        logger.info(f"CDN cache invalidation initiated for {key}: {response}")
+    except Exception as e:
+        logger.error(f"Error invalidating CDN cache: {str(e)}")
+        raise
+
 
 def lambda_handler(event, context):
     """Lambda function to convert CMYK images to RGB."""
@@ -28,8 +76,10 @@ def lambda_handler(event, context):
     logger.info(f"Received event: {json.dumps(event, indent=2)}")
     # Define the bucket
     bucket = "ss-au-bank-preprod"
+    cdn_base_url = os.environ['CDN_BASE_URL']
+    distribution_id= os.environ.get('CLOUDFRONT_DISTRIBUTION_ID')
     result = {"status": "success", "message": "", "processed_files": []}
-
+    slack_token = getSecret()
     try:
         # Process each record in the event
         for record in event['Records']:
@@ -41,12 +91,26 @@ def lambda_handler(event, context):
                 logger.info(f"Skipping file {key}: not in smartsell/pages_1/")
                 result["processed_files"].append({"file": key, "status": "skipped", "reason": "Not in smartsell/pages_1/"})
                 continue
+            
+              # Get file metadata to retrieve original file name
+            try:
+                metadata = s3_client.head_object(Bucket=bucket, Key=key)['Metadata']
+                original_file_name = metadata.get('original_file_name', key.split('/')[-1])
+            except Exception as e:
+                logger.error(f"Error fetching metadata for {key}: {str(e)}")
+                original_file_name = key.split('/')[-1]
 
             # Download the file
             logger.info(f"Downloading {key} from bucket {bucket}")
-            file_obj = s3_client.get_object(Bucket=bucket, Key=key)
-            file_content = file_obj['Body'].read()
-
+            try:
+                
+                file_obj = s3_client.get_object(Bucket=bucket, Key=key)
+                file_content = file_obj['Body'].read()
+            except Exception as e:
+                logger.error(f"Error downloading {key} from S3: {str(e)}")
+                result["processed_files"].append({"file": key, "status": "failed", "reason": str(e)})
+                continue
+            
             # Open image with Pillow
             try:
                 image = Image.open(io.BytesIO(file_content))
@@ -74,10 +138,11 @@ def lambda_handler(event, context):
                     Key=key,
                     Body=buffer,
                     ContentType=file_obj.get('ContentType', 'image/jpeg'),
-                    Tagging="isCmykProcessed=true"
+                    Tagging="isRgbProcessed=true"
                 )
                 logger.info(f"Successfully converted and uploaded {key}")
                 result["processed_files"].append({"file": key, "status": "converted", "reason": "Converted to RGB"})
+                invalidate_CDN_cache(distribution_id, key)
 
             except Exception as e:
                 logger.error(f"Error processing {key}: {str(e)}")
@@ -86,6 +151,8 @@ def lambda_handler(event, context):
     except Exception as e:
         logger.error(f"Error processing event: {str(e)}")
         result["status"] = "error"
+        cdn_url = f'{cdn_base_url}/{key}'
+        send_slack_notification(original_file_name, cdn_url, str(e), slack_token)
         result["message"] = str(e)
 
     # Return result
@@ -96,7 +163,8 @@ def lambda_handler(event, context):
     }
     
 # if __name__ == "__main__":
-#    sample_event ={
+    
+#     sample_event ={
 #   "Records": [
 #     {
 #       "eventVersion": "2.1",
@@ -133,5 +201,7 @@ def lambda_handler(event, context):
 #       }
 #     }
 #   ]
-#  }
-#    pprint(lambda_handler(event, None))
+#  }   
+   
+#     # send_slack_notification()
+#     pprint(lambda_handler(sample_event, None))
