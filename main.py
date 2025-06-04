@@ -106,9 +106,9 @@ def update_conversion_time(bucket, key, conversion_time):
         tags.append({'Key': 'conversionTimeSec', 'Value': str(conversion_time)})
         s3_client.put_object_tagging(
             Bucket = bucket,
-            key=key,
+            Key=key,
             Tagging={
-                'Tagset':tags
+                'TagSet':tags
             }
         )
         logger.info(f"Updated conversion time for {key} to {conversion_time} seconds")  
