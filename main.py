@@ -31,7 +31,7 @@ def send_slack_notification(original_file_name,cdn_url,error_message,slack_token
     payload={
         "channel":"#cmyktorgb-alerts",
         "text":(
-             f"CMYK to RGB Conversion Failed\n"
+            f"CMYK to RGB Conversion Failed\n"
             f"Original File: {original_file_name}\n"
             f"CDN URL: {cdn_url}\n"
             f"Retries: {retries}\n"
@@ -45,9 +45,10 @@ def send_slack_notification(original_file_name,cdn_url,error_message,slack_token
         logger.error(f"Error sending Slack notification: {str(e)}")
 
 
-def is_nonrgb(image):
+def is_rgb(image):
     """Check if the image is in Non-RGB mode."""
-    return image.mode not in("RGB")
+    logger.info(f"Checking if image is RGB: {image.mode}")
+    return image.mode in("RGB")
 
 def convert_to_rgb(image):
     """Convert CMYK image to RGB."""
@@ -71,32 +72,6 @@ def invalidate_CDN_cache(distribution_id, key):
         logger.error(f"Error invalidating CDN cache: {str(e)}")
         raise
     
-def get_retry_count(bucket,key):
-    """Get the retry count from S3 object tags."""
-    try:
-        response = s3_client.get_object_tagging(Bucket=bucket, Key=key)
-        logger.info(f"Tags for {key}: {response['TagSet']}")
-        tags = {tag['Key']: tag['Value'] for tag in response['TagSet']}
-        return int(tags.get('retryCount', 0))
-    except Exception as e:
-        logger.error(f"Error fetching retry count for {key}: {str(e)}")
-        return 0
-
-def update_retry_count(bucket,key,retries):
-    """Update the retry count in S3 object tags."""
-    try:
-        response = s3_client.put_object_tagging(
-            Bucket=bucket,
-            Key=key,
-            Tagging={
-                'TagSet': [
-                    {'Key': 'retries', 'Value': str(retries)}
-                ]
-            }
-        )
-        logger.info(f"Updated retries tag to {retries} for {key} with response: {response}")
-    except Exception as e:
-        logger.error(f"Error updating retry count for {key}: {str(e)}")
         
 def update_conversion_time(bucket, key, conversion_time):
     try:
@@ -161,6 +136,7 @@ def lambda_handler(event, context):
                 try:
                     file_obj = s3_client.get_object(Bucket=bucket, Key=key)
                     file_content = file_obj['Body'].read()
+                    
                 except Exception as e:
                     logger.error(f"Error downloading {key} from S3: {str(e)} \n Retry Count: {attempt}")
                     if attempt == retries-1:
@@ -173,8 +149,8 @@ def lambda_handler(event, context):
                     image = Image.open(io.BytesIO(file_content))
                     logger.info(f"Image mode: {image.mode}")
                     # Check if CMYK
-                    if not is_nonrgb(image):
-                        logger.info(f"File {key} is not CMYK, no conversion needed")
+                    if is_rgb(image):
+                        logger.info(f"File {key} is in RGB Format, no conversion needed")
                         result["processed_files"].append({"file": key, "status": "skipped", "reason": "Not CMYK"})
                         return
                     # Convert to RGB
@@ -188,7 +164,7 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(f"Error processing image {key}: {str(e)} \n Retry Count: {attempt}")
                     if attempt == retries-1:
-                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while image processing \n Error : {str(e)}", slack_token, retries)
+                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while image processing \n System Error : {str(e)}", slack_token, retries)
                     continue
                 
                 # Upload converted file
@@ -205,7 +181,7 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(f"Error Uploading {key} to S3 : {str(e)}")
                     if attempt == retries-1:
-                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while Uploading image to S3 after conversion \n Error : {str(e)}", slack_token, retries+1)
+                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while Uploading image to S3 after conversion \n System Error : {str(e)}", slack_token, retries)
                     continue
                 
                 # update conversion time
@@ -215,7 +191,7 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(f"Error tagging Conversion Time for {key} : {str(e)}")
                     if attempt == retries-1:
-                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while tagging Conversion Time \n Error : {str(e)}", slack_token, retries+1)
+                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while tagging Conversion Time \n System Error : {str(e)}", slack_token, retries)
                     continue
                 
                 try:
@@ -225,7 +201,7 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(f"Error invalidating CDN cache for {key}: {str(e)}")
                     if attempt == retries-1:
-                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while invalidating CDN cache \n Error : {str(e)}", slack_token, retries+1)
+                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while invalidating CDN cache \n System Error : {str(e)}", slack_token, retries)
                     continue
                 break  # Exit the retry loop on success
                 
