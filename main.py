@@ -144,6 +144,8 @@ def lambda_handler(event, context):
             try:
                 metadata = s3_client.head_object(Bucket=bucket, Key=key)['Metadata']
                 original_file_name = metadata.get('original_file_name', key.split('/')[-1])
+                if len(original_file_name) > 8:
+                    original_file_name = original_file_name[8:]
             except Exception as e:
                 logger.error(f"Error fetching metadata for {key}: {str(e)}")
                 original_file_name = key.split('/')[-1]
