@@ -113,7 +113,7 @@ def lambda_handler(event, context):
     retries=0
     buffer= None
     key=""
-    
+    original_file_name = ""
     
     try:
         # Process each record in the event
