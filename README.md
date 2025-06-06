@@ -23,7 +23,7 @@ This Lambda function is triggered when an image is uploaded to a specific path i
 
 | Secret Name | Description |
 | --- | --- |
-| `SLACK_Non-RGBTORGB_ALERT_API_TOKEN`  = {`slack_api_token`:’token_value’} |
+| `SLACK_CMYKTORGB_ALERT_API_TOKEN`  = {`slack_api_token`:’token_value’} |
  | Slack Bot OAuth token to send alerts to Slack channel `#Non-RGBtorgb-alerts` |
 
 **🚨 Failure Scenarios & Slack Alerts**
@@ -106,7 +106,7 @@ System Error: Reason for the error
     }
     ```
     
-    Name it exactly: `SLACK_Non-RGBTORGB_ALERT_API_TOKEN`
+    Name it exactly: `SLACK_CMYKTORGB_ALERT_API_TOKEN`
     
 
 ### 🔁 S3 Event Trigger Setup
@@ -120,7 +120,7 @@ System Error: Reason for the error
 ### 🧪 Debugging & Observability
 
 - View logs in **CloudWatch Logs** → Linked from the Lambda function page.
-- Failures trigger a **Slack message** to `#Non-RGBtorgb-alerts` with:
+- Failures trigger a **Slack message** to `#cmyktorgb-alerts` with:
     - File name
     - CDN URL
     - Retry count
