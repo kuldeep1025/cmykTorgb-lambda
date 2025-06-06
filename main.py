@@ -72,23 +72,15 @@ def invalidate_CDN_cache(distribution_id, key):
         logger.error(f"Error invalidating CDN cache: {str(e)}")
         raise
     
-        
-def update_conversion_time(bucket, key, conversion_time):
+def get_image_tags(bucket, key):
+    """Retrieve tags for the image from S3."""
     try:
         response = s3_client.get_object_tagging(Bucket=bucket, Key=key)
         tags = response.get('TagSet', [])
-        tags=[tag for tag in tags if tag['Key'] != 'conversionTimeSec']
-        tags.append({'Key': 'conversionTimeSec', 'Value': str(conversion_time)})
-        s3_client.put_object_tagging(
-            Bucket = bucket,
-            Key=key,
-            Tagging={
-                'TagSet':tags
-            }
-        )
-        logger.info(f"Updated conversion time for {key} to {conversion_time} seconds")  
+        return {tag['Key']: tag['Value'] for tag in tags}
     except Exception as e:
-        logger.error(f"Error updating conversion time for {key}: {str(e)}")
+        logger.error(f"Error retrieving tags for {key}: {str(e)}")
+        return {}
 
 
 def lambda_handler(event, context):
@@ -97,7 +89,7 @@ def lambda_handler(event, context):
     # Log the entire event body
     logger.info(f"Received event: {json.dumps(event, indent=2)}")
     # Define the bucket
-    bucket = "ss-au-bank-preprod"
+    bucket = os.environ['TARGET_BUCKET_NAME']
     cdn_base_url = os.environ['CDN_BASE_URL']
     distribution_id= os.environ.get('CLOUDFRONT_DISTRIBUTION_ID')
     result = {"status": "success", "message": "", "processed_files": []}
@@ -120,39 +112,51 @@ def lambda_handler(event, context):
                 result["processed_files"].append({"file": key, "status": "skipped", "reason": "Not in smartsell/pages_1/"})
                 continue
             
-              # Get file metadata to retrieve original file name
+            try:
+                # Get the tags for the image
+                tags = get_image_tags(bucket, key)
+                logger.info(f"Tags for {key}: {tags}")
+                if 'isRgbProcessed' in tags:
+                    logger.info(f"File {key} has already been processed to RGB, skipping.")
+                    result["processed_files"].append({"file": key, "status": "skipped", "reason": "Already processed to RGB"})
+                    return
+                
+            except Exception as e:
+                logger.error(f"Error retrieving tags for {key}: {str(e)}")
+                tags = {}
+                
+            # Get file metadata to retrieve original file name
             try:
                 metadata = s3_client.head_object(Bucket=bucket, Key=key)['Metadata']
                 original_file_name = metadata.get('original_file_name', key.split('/')[-1])
             except Exception as e:
                 logger.error(f"Error fetching metadata for {key}: {str(e)}")
                 original_file_name = key.split('/')[-1]
+            
+            # Download the file
+            logger.info(f"Downloading {key} from bucket {bucket}")
+            try:
+                file_obj = s3_client.get_object(Bucket=bucket, Key=key)
+                file_content = file_obj['Body'].read()
+            except Exception as e:
+                logger.error(f"Error downloading {key} from S3: {str(e)} \n Retry Count: {attempt}")
+                send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', str(e), slack_token, retries)
+                result["processed_files"].append({"file": key, "status": "failed", "reason": str(e)})
+                continue
+            
+            # Open image with Pillow
+            image = Image.open(io.BytesIO(file_content))
+            logger.info(f"Image mode: {image.mode}")
+            # Check if non-rgb image
+            if is_rgb(image):
+                logger.info(f"File {key} is in RGB Format, no conversion needed")
+                result["processed_files"].append({"file": key, "status": "skipped", "reason": "Not Non-RGB"})
+                return 
                 
             # retries limit exceeded 
             retries = 3
             for attempt in range(retries):
-                # Download the file
-                logger.info(f"Downloading {key} from bucket {bucket}")
                 try:
-                    file_obj = s3_client.get_object(Bucket=bucket, Key=key)
-                    file_content = file_obj['Body'].read()
-                    
-                except Exception as e:
-                    logger.error(f"Error downloading {key} from S3: {str(e)} \n Retry Count: {attempt}")
-                    if attempt == retries-1:
-                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', str(e), slack_token, retries)
-                    result["processed_files"].append({"file": key, "status": "failed", "reason": str(e)})
-                    continue
-                
-                # Open image with Pillow
-                try:
-                    image = Image.open(io.BytesIO(file_content))
-                    logger.info(f"Image mode: {image.mode}")
-                    # Check if CMYK
-                    if is_rgb(image):
-                        logger.info(f"File {key} is in RGB Format, no conversion needed")
-                        result["processed_files"].append({"file": key, "status": "skipped", "reason": "Not CMYK"})
-                        return
                     # Convert to RGB
                     logger.info(f"Converting {key} to RGB")
                     rgb_image = convert_to_rgb(image)
@@ -161,49 +165,43 @@ def lambda_handler(event, context):
                     buffer = io.BytesIO()
                     rgb_image.save(buffer, format=image.format or 'JPEG')
                     buffer.seek(0)
+                    break  # Exit the retry loop on success
                 except Exception as e:
                     logger.error(f"Error processing image {key}: {str(e)} \n Retry Count: {attempt}")
                     if attempt == retries-1:
                         send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while image processing \n System Error : {str(e)}", slack_token, retries)
                     continue
                 
-                # Upload converted file
-                logger.info(f"Uploading converted file to {key}")
-                try:
-                    s3_client.put_object(
-                        Bucket=bucket,
-                        Key=key,
-                        Body=buffer,
-                        ContentType=file_obj.get('ContentType', 'image/jpeg'),
-                    )
-                    logger.info(f"Successfully converted and uploaded {key}")
-                    result["processed_files"].append({"file": key, "status": "converted", "reason": "Converted to RGB"})
-                except Exception as e:
-                    logger.error(f"Error Uploading {key} to S3 : {str(e)}")
-                    if attempt == retries-1:
-                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while Uploading image to S3 after conversion \n System Error : {str(e)}", slack_token, retries)
-                    continue
-                
-                # update conversion time
-                try:
-                    conversion_time = start_time - time.time()
-                    update_conversion_time(bucket, key, conversion_time)
-                except Exception as e:
-                    logger.error(f"Error tagging Conversion Time for {key} : {str(e)}")
-                    if attempt == retries-1:
-                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while tagging Conversion Time \n System Error : {str(e)}", slack_token, retries)
-                    continue
-                
-                try:
-                    # Invalidate CDN cache
-                    invalidate_CDN_cache(distribution_id, key)
-                    logger.info(f"CDN cache invalidated for {key}")
-                except Exception as e:
-                    logger.error(f"Error invalidating CDN cache for {key}: {str(e)}")
-                    if attempt == retries-1:
-                        send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while invalidating CDN cache \n System Error : {str(e)}", slack_token, retries)
-                    continue
-                break  # Exit the retry loop on success
+            # Upload converted file
+            logger.info(f"Uploading converted file to {key}")
+            try:
+                conversion_time = int(time.time()-start_time)
+                tags = [
+                    {'Key': 'conversionTimeSec', 'Value': str(conversion_time)},
+                    {'Key': 'isRgbProcessed', 'Value': 'True'},
+                ]
+                s3_client.put_object(
+                    Bucket=bucket,
+                    Key=key,
+                    Body=buffer,
+                    ContentType=file_obj.get('ContentType', 'image/jpeg'),
+                    Tagging=tags
+                )
+                logger.info(f"Successfully converted and uploaded {key}")
+                result["processed_files"].append({"file": key, "status": "converted", "reason": "Converted to RGB"})
+            except Exception as e:
+                logger.error(f"Error Uploading {key} to S3 : {str(e)}")
+                send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while Uploading image to S3 after conversion \n System Error : {str(e)}", slack_token, retries)
+                continue
+            
+            try:
+                # Invalidate CDN cache
+                invalidate_CDN_cache(distribution_id, key)
+                logger.info(f"CDN cache invalidated for {key}")
+            except Exception as e:
+                logger.error(f"Error invalidating CDN cache for {key}: {str(e)}")
+                send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while invalidating CDN cache \n System Error : {str(e)}", slack_token, retries)
+                continue
                 
     except Exception as e:
         logger.error(f"Error processing event: {str(e)}")
