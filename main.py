@@ -112,6 +112,7 @@ def lambda_handler(event, context):
     start_time=time.time()
     retries=0
     buffer= None
+    key=""
     
     
     try:
