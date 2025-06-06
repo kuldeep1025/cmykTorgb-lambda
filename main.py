@@ -72,6 +72,21 @@ def invalidate_CDN_cache(distribution_id, key):
         logger.error(f"Error invalidating CDN cache: {str(e)}")
         raise
     
+def update_conversion_time(bucket, key, conversion_time):
+    try:
+        response = s3_client.get_object_tagging(Bucket=bucket, Key=key)
+        tags = response.get('TagSet', [])
+        tags = [tag for tag in tags if tag['Key'] != 'conversionTimeSec']
+        tags.append({'Key': 'conversionTimeSec', 'Value': str(conversion_time)})
+        s3_client.put_object_tagging(
+            Bucket=bucket,
+            Key=key,
+            Tagging={'TagSet': tags}
+        )
+        logger.info(f"Updated conversion time for {key} to {conversion_time} seconds")  
+    except Exception as e:
+        logger.error(f"Error updating conversion time for {key}: {str(e)}")
+    
 def get_image_tags(bucket, key):
     """Retrieve tags for the image from S3."""
     try:
@@ -175,23 +190,26 @@ def lambda_handler(event, context):
             # Upload converted file
             logger.info(f"Uploading converted file to {key}")
             try:
-                conversion_time = int(time.time()-start_time)
-                tags = [
-                    {'Key': 'conversionTimeSec', 'Value': str(conversion_time)},
-                    {'Key': 'isRgbProcessed', 'Value': 'True'},
-                ]
                 s3_client.put_object(
                     Bucket=bucket,
                     Key=key,
                     Body=buffer,
                     ContentType=file_obj.get('ContentType', 'image/jpeg'),
-                    Tagging=tags
+                    Tagging="isRgbProcessed=true",
                 )
                 logger.info(f"Successfully converted and uploaded {key}")
                 result["processed_files"].append({"file": key, "status": "converted", "reason": "Converted to RGB"})
             except Exception as e:
                 logger.error(f"Error Uploading {key} to S3 : {str(e)}")
                 send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while Uploading image to S3 after conversion \n System Error : {str(e)}", slack_token, retries)
+                continue
+            
+            try:
+                conversion_time = int(time.time()-start_time)
+                update_conversion_time(bucket, key, conversion_time)
+            except Exception as e:
+                logger.error(f"Error tagging Conversion Time for {key}: {str(e)}")
+                send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while tagging Conversion Time \n System Error: {str(e)}", slack_token, retries)
                 continue
             
             try:
