@@ -147,6 +147,7 @@ def lambda_handler(event, context):
                 original_file_name = metadata.get('original_file_name', key.split('/')[-1])
                 if len(original_file_name) > 8:
                     original_file_name = original_file_name[8:]
+                logger.info(f"original_file_name: {original_file_name} for key {key}")
             except Exception as e:
                 logger.error(f"Error fetching metadata for {key}: {str(e)}")
                 original_file_name = key.split('/')[-1]
