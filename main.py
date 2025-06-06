@@ -155,7 +155,7 @@ def lambda_handler(event, context):
                 file_content = file_obj['Body'].read()
             except Exception as e:
                 logger.error(f"Error downloading {key} from S3: {str(e)} \n Retry Count: {attempt}")
-                send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', str(e), slack_token, retries)
+                send_slack_notification(original_file_name, f'{cdn_base_url}/{key}', f"Error while image Downloading \n System Error : {str(e)}", slack_token, retries)
                 result["processed_files"].append({"file": key, "status": "failed", "reason": str(e)})
                 continue
             
