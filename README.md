@@ -23,26 +23,24 @@ This Lambda function is triggered when an image is uploaded to a specific path i
 
 | Secret Name | Description |
 | --- | --- |
-| `SLACK_CMYKTORGB_ALERT_API_TOKEN`  = {
-`slack_api_token`:’token_value’
-}
+| `SLACK_CMYKTORGB_ALERT_API_TOKEN`  = {`slack_api_token`:’token_value’} |
  | Slack Bot OAuth token to send alerts to Slack channel `#cmyktorgb-alerts` |
 
 **🚨 Failure Scenarios & Slack Alerts**
 
-| **Scenario** | **Slack Alert Triggered** | **Notes** |
+| **Scenario** | **Slack Alert Triggered** | **Slack Message Preview** |
 | --- | --- | --- |
-| File not in `smartsell/pages_1/` | ❌ No | Skipped silently |
-| Retry count for file >= 3 while image conversion to RGB | ✅ Yes | Message: `Max retries reached` |
-| S3 download failure | ✅ Yes | Error while downloading file from S3
-
-Message: `Error while downloading file from S3` |
-| Image processing failure (invalid image, bad format) | ✅ Yes | Includes PIL-related issues
-
-Message: `Library related issues occurred` |
-| Any unhandled runtime error | ✅ Yes | Captures unexpected exceptions
-
-Message: `{exceptions error message}` |
+| File not in `smartsell/pages_1/` | ❌ No | *No alert — file ignored silently* |
+| File is already tagged `isCmykProcessed: true` | ❌ No | *No alert — file considered already processed* |
+| File retry count >= 3 while image conversion | ✅ Yes | `Max retries reached for file: {filename}` |
+| S3 download failure | ✅ Yes | `Error while downloading file from S3: {filename}` |
+| Image is invalid or corrupted (Pillow error) | ✅ Yes | `Library related issues occurred while processing file: {filename}` |
+| Image is not Non-RGB (e.g., already RGB) | ❌ No | *No alert — image skipped as it's not in CMYK mode* |
+| Conversion succeeded | ❌ No | *No alert — success* |
+| Upload back to S3 fails | ✅ Yes | `Failed to upload RGB image to S3: {filename}` |
+| Tagging fails | ✅ Yes | `Failed to tag image on S3: {filename}` |
+| CloudFront invalidation fails | ✅ Yes | `CloudFront invalidation failed for: {cdn_url}` |
+| Any unexpected runtime exception | ✅ Yes | `{exception error message}` (dynamically included) |
 
 **Slack message example:**
 
@@ -128,9 +126,4 @@ System Error: Reason for the error
     - Retry count
     - Error message
 
-<aside>
-💡
 
-When doing automation for all clients the message needs to have the company name
-
-</aside>
