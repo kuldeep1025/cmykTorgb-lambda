@@ -1,6 +1,6 @@
 **📌 Purpose**
 
-This Lambda function is triggered when an image is uploaded to a specific path in an S3 bucket (`ss-au-bank-preprod/smartsell/pages_1/`). It checks if the image is in **CMYK** color space and, if so, converts it to **RGB**, uploads it back to S3 (overwriting the original), and **invalidates the CloudFront CDN cache** for the updated file.
+This Lambda function is triggered when an image is uploaded to a specific path in an S3 bucket (`ss-au-bank-preprod/smartsell/pages_1/`). It checks if the image is in **Non-RGB** color space and, if so, converts it to **RGB**, uploads it back to S3 (overwriting the original), and **invalidates the CloudFront CDN cache** for the updated file.
 
 ### ✅ Core Features
 
@@ -23,19 +23,19 @@ This Lambda function is triggered when an image is uploaded to a specific path i
 
 | Secret Name | Description |
 | --- | --- |
-| `SLACK_CMYKTORGB_ALERT_API_TOKEN`  = {`slack_api_token`:’token_value’} |
- | Slack Bot OAuth token to send alerts to Slack channel `#cmyktorgb-alerts` |
+| `SLACK_Non-RGBTORGB_ALERT_API_TOKEN`  = {`slack_api_token`:’token_value’} |
+ | Slack Bot OAuth token to send alerts to Slack channel `#Non-RGBtorgb-alerts` |
 
 **🚨 Failure Scenarios & Slack Alerts**
 
 | **Scenario** | **Slack Alert Triggered** | **Slack Message Preview** |
 | --- | --- | --- |
 | File not in `smartsell/pages_1/` | ❌ No | *No alert — file ignored silently* |
-| File is already tagged `isCmykProcessed: true` | ❌ No | *No alert — file considered already processed* |
+| File is already tagged `isRGBProcessed: true` | ❌ No | *No alert — file considered already processed* |
 | File retry count >= 3 while image conversion | ✅ Yes | `Max retries reached for file: {filename}` |
 | S3 download failure | ✅ Yes | `Error while downloading file from S3: {filename}` |
 | Image is invalid or corrupted (Pillow error) | ✅ Yes | `Library related issues occurred while processing file: {filename}` |
-| Image is not Non-RGB (e.g., already RGB) | ❌ No | *No alert — image skipped as it's not in CMYK mode* |
+| Image is not Non-RGB (e.g., already RGB) | ❌ No | *No alert — image skipped as it's not in Non-RGB mode* |
 | Conversion succeeded | ❌ No | *No alert — success* |
 | Upload back to S3 fails | ✅ Yes | `Failed to upload RGB image to S3: {filename}` |
 | Tagging fails | ✅ Yes | `Failed to tag image on S3: {filename}` |
@@ -45,7 +45,7 @@ This Lambda function is triggered when an image is uploaded to a specific path i
 **Slack message example:**
 
 ```
-CMYK to RGB Conversion Failed
+Non-RGB to RGB Conversion Failed
 Original File: abc123.pdf
 CDN URL: https://cdn.example.com/smartsell/pages_1/abc123.pdf
 Retries: 3
@@ -59,7 +59,7 @@ System Error: Reason for the error
 - ✅ Assumes your **S3 bucket** and **CloudFront distribution** are already set up.
     - **A. Create a Lambda Function**
         - Go to AWS Lambda → Create function → Author from scratch.
-        - Assign a name, e.g., `cmyk-to-rgb-converter`.
+        - Assign a name, e.g., `Non-RGB-to-rgb-converter`.
         - Choose **Python 3.9+** as the runtime.
         - Upload the zipped deployment package or deploy via SAM/Serverless Framework.
         - Add Pillow and Requests dependencies as layers
@@ -82,7 +82,7 @@ System Error: Reason for the error
     **Secrets Manager Access:**
     
     - Permission to read one secret:
-        - Name: `SLACK_CMYKTORGB_ALERT_API_TOKEN`
+        - Name: `SLACK_Non-RGBTORGB_ALERT_API_TOKEN`
     
     ### C. Set Environment Variables
     
@@ -106,7 +106,7 @@ System Error: Reason for the error
     }
     ```
     
-    Name it exactly: `SLACK_CMYKTORGB_ALERT_API_TOKEN`
+    Name it exactly: `SLACK_Non-RGBTORGB_ALERT_API_TOKEN`
     
 
 ### 🔁 S3 Event Trigger Setup
@@ -120,7 +120,7 @@ System Error: Reason for the error
 ### 🧪 Debugging & Observability
 
 - View logs in **CloudWatch Logs** → Linked from the Lambda function page.
-- Failures trigger a **Slack message** to `#cmyktorgb-alerts` with:
+- Failures trigger a **Slack message** to `#Non-RGBtorgb-alerts` with:
     - File name
     - CDN URL
     - Retry count
